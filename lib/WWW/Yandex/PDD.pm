@@ -3,7 +3,7 @@ package WWW::Yandex::PDD;
 use strict;
 use warnings;
 
-our $VERSION = '0.04';
+our $VERSION = '0.05';
 
 use LWP::UserAgent; # also required: Crypt::SSLeay or IO::Socket::SSL
 use LWP::ConnCache;
@@ -68,7 +68,7 @@ sub __set_error
 
 	if ($is_http)
 	{
-		$self -> {error}      = { code => &WWW::Yandex::PDD::Error::HTTP_ERROR };
+		$self -> {error}      = { code => &WWW::Yandex::PDD::Error::HTTP_ERROR, info => undef };
 		$self -> {http_error} = { code => $code, info => $info };
 	}
 	else
@@ -158,6 +158,12 @@ sub __parse_response
 		return undef;
 	}
 
+	if ( $self -> {_error} = $self -> __get_node_text('/action/status/error') )
+	{
+		$self -> __handle_error();
+		return undef;
+	}
+
 	if ( $self -> __get_node_text('/page/xscript_invoke_failed/@error') )
 	{
 		my $info = '';
@@ -212,9 +218,7 @@ sub is_user_exists
 	return $self -> __unknown_error();
 }
 
-# TODO: reg_domain
 # TODO: reg_default_user
-# TODO: del_domain
 # TODO: add_logo
 # TODO: del_logo
 # TODO: add_admin
@@ -224,6 +228,55 @@ sub is_user_exists
 # TODO: delete_forward
 # TODO: create_general_maillist
 # TODO: delete_general_maillist
+
+sub get_last_error {
+	my $self = shift;
+
+	my $error;
+
+	if ( $self -> {error} ) {
+		$error = $self -> {error};
+	} elsif ( $self -> {http_error} ) {
+		$error = $self -> {http_error};
+	}
+
+	if ( $error ) {
+		return {
+			code => $error -> {code},
+			info => $error -> {info},
+		};
+	} else {
+		return undef;
+	}
+}
+
+sub reg_domain
+{
+	my $self = shift;
+	my $domain = shift;
+
+	my $url = API_URL . 'api/reg_domain.xml?token=' . $self -> {token} . '&domain=' . $domain;
+
+	return undef unless $self -> __make_request($url);
+
+	return {
+		name 			=> $self -> __get_node_text('/action/domains/domain/name/text()'),
+		secret_name 	=> $self -> __get_node_text('/action/domains/domain/secret_name/text()'),
+		secret_value 	=> $self -> __get_node_text('/action/domains/domain/secret_value/text()'),
+	};
+}
+
+sub del_domain
+{
+	my $self = shift;
+	my $domain = shift;
+
+	my $url = API_URL . 'api/del_domain.xml?token=' . $self -> {token} . '&domain=' . $domain;
+
+	return undef unless $self -> __make_request($url);
+
+	return 1;
+}
 
 sub create_user
 {
@@ -582,6 +635,46 @@ Construct a new L<WWW::Yandex::PDD> object
 	$cert_file New $ENV{HTTPS_CA_FILE} value
 
 
+=item $pdd->get_last_error()
+
+Returns undef if there was no error; otherwise
+
+		$return = {
+			code => $error -> {code},
+			info => $error -> {info},
+		};
+
+
+=back
+
+
+=head2 DOMAINS
+
+=over 2
+
+=item $pdd->reg_domain( $domain )
+
+Returns undef if error, otherwise
+	
+	$return = {
+		name 			=> $domain_name,
+		secret_name 	=> $secret_name,
+		secret_value 	=> $secret_value,
+	}
+
+
+=item $pdd->del_domain( $domain )
+
+Returns 1 if success, undef if error
+
+
+=back
+
+
+=head2 USERS
+
+=over 2
+
 =item $pdd->create_user( $login, $password );
 
 =item $pdd->create_user( $login, $encrypted_password, 'encrypted' );
@@ -649,19 +742,9 @@ Returns domain information and user list, undef if error
 	}
 
 
-=item $pdd->import_user( $login, $password, ext_login => $ext_login, ext_password => $ext_password, forward_to => $forward, save_copy => $save_copy )
-
-Register a new user and import all the mail from another server
-
-$ext_login login on the source server, defaults to $login
-$ext_password user's password on the source server, defaults to $password
-$forward_to optional, set forwarding for this new mailbox
-$save_copy works only if forwarding is on; 0 - do not save copies in the local mailbox, 1 - save copies and forward
-
-
 =item $pdd->is_user_exists( $login )
 
-Returns 0 if exists, 1 if doesn't exist, undef if error
+Returns 1 if exists, 0 if doesn't exist, undef if error
 
 
 =item $pdd->set_forward( $login, $forward_to, $save_copy )
@@ -672,6 +755,12 @@ $save_copy: "yes", "no"
 
 Returns 1 if OK, undef if error
 
+=back
+
+
+=head2 IMPORT
+
+=over 2
 
 =item $pdd->prepare_import( $server, method => $method, port => $port, callback = $callback, use_ssl => $use_ssl )
 
@@ -687,6 +776,16 @@ Set import options for the domain
 	with login="imported user's login" parameter after finishing import
 
 Returns 1 if OK, undef if error
+
+
+=item $pdd->import_user( $login, $password, ext_login => $ext_login, ext_password => $ext_password, forward_to => $forward, save_copy => $save_copy )
+
+Register a new user and import all the mail from another server
+
+$ext_login login on the source server, defaults to $login
+$ext_password user's password on the source server, defaults to $password
+$forward_to optional, set forwarding for this new mailbox
+$save_copy works only if forwarding is on; 0 - do not save copies in the local mailbox, 1 - save copies and forward
 
 
 =item $pdd->get_import_status( $login )
@@ -718,7 +817,6 @@ Returns 1 if OK, undef if error
 	$copy_one_folder folder on the source; UTF-8, optional
 
 Returns 1 if OK, undef if error
-
 
 =back
 

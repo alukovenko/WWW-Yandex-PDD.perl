@@ -690,6 +690,7 @@ Returns UID if success, undef otherwise
 
 
 =item $pdd->delete_user( $login )
+
 =item $pdd->delete_user( $login, $domain )
 
 	Optional $domain if $login is in another domain

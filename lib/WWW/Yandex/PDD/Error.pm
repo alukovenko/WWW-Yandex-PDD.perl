@@ -79,8 +79,6 @@ my %ERR_R = (
       	'unknown'                     => REQUEST_FAILED,
 );
 
-# our @EXPORT_OK   = ( 'identify', @ERR );
-#our %EXPORT_TAGS = ( errors => [ @ERR ] , all => [ @EXPORT_OK ] );
 our @EXPORT_OK   = ( @ERR );
 our %EXPORT_TAGS = ( errors => [ @ERR ] );
 

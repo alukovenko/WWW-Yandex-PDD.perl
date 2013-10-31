@@ -9,6 +9,7 @@ use LWP::UserAgent; # also required: Crypt::SSLeay or IO::Socket::SSL
 use LWP::ConnCache;
 use XML::LibXML;
 use XML::LibXML::XPathContext; # explicit use is required in some cases
+use URI::Escape;
 
 use WWW::Yandex::PDD::Error;
 
@@ -211,7 +212,19 @@ sub is_user_exists
 	return $self -> __unknown_error();
 }
 
-#TODO: reg_user, 
+# TODO: reg_domain
+# TODO: reg_default_user
+# TODO: del_domain
+# TODO: add_logo
+# TODO: del_logo
+# TODO: add_admin
+# TODO: del_admin
+# TODO: get_admins
+# TODO: get_forward_list
+# TODO: delete_forward
+# TODO: create_general_maillist
+# TODO: delete_general_maillist
+
 sub create_user
 {
 	my $self  = shift;
@@ -298,8 +311,15 @@ sub delete_user
 {
 	my $self  = shift;
 	my $login = shift;
+	my $domain = shift;
 
-	my $url = API_URL . 'delete_user.xml?token=' . $self -> {token}  . '&login=' . $login;
+	my $url;
+
+	if (defined $domain) {
+		$url = API_URL . 'del_user.xml?token=' . $self -> {token}  . '&login=' . $login . '&domain=' . $domain;
+	} else {
+		$url = API_URL . 'delete_user.xml?token=' . $self -> {token}  . '&login=' . $login;	
+	} 
 
 	return undef unless $self -> __make_request($url);
 
@@ -503,32 +523,31 @@ sub stop_import
 	return $self -> __unknown_error();
 }
 
-# fails for existing accounts
-#sub import_imap_folder
-#{
-#	my $self     = shift;
-#	my $login    = shift;
-#	my $password = shift;
-#
-#	my $ext_login    = shift;
-#	my $ext_password = shift;
-#
-#	my $url = API_URL . 'import_imap.xml?token='    . $self -> {token}
-#							. '&login='           . $login
-#							. '&ext_login='       . $ext_login
-#							. '&ext_password='    . $ext_password;
-#
-#	$url .= '&int_password=' . $password if ($password);
-#
-#	return undef unless $self -> __make_request($url);
-#
-#	if ( $self -> __get_nodelist('/page/ok') -> [0] )
-#	{
-#		return 1;
-#	}
-#
-#	return $self -> __unknown_error();
-#}
+sub import_imap_folder
+{
+	my $self    = shift;
+	my $login   = shift;
+	my %data 	= shift;
+
+	my $url = API_URL . 'import_imap.xml?token='	. $self -> {token}
+							. '&login='       		. $login
+							. '&ext_password='    	. $data{ext_password};
+
+	$url .= '&ext_login=' . $data{ext_login} if (exists $data{ext_login});
+	$url .= '&int_password=' . $data{password} if (exists $data{password}); 
+	$url .= '&copy_one_folder=' . uri_escape_utf8($data{copy_one_folder}) if (exists $data{copy_one_folder});
+
+	return undef unless $self -> __make_request($url);
+
+	if ( $self -> __get_nodelist('/page/ok') -> [0] )
+	{
+		return 1;
+	}
+
+	return $self -> __unknown_error();
+}
+
+=encoding utf8
 
 =head1 NAME
 
@@ -578,6 +597,9 @@ Returns UID if success, undef otherwise
 
 
 =item $pdd->delete_user( $login )
+=item $pdd->delete_user( $login, $domain )
+
+	Optional $domain if $login is in another domain
 
 Returns 1 if success
 
@@ -631,7 +653,7 @@ Returns domain information and user list, undef if error
 
 Register a new user and import all the mail from another server
 
-$ext_login login name on the source server, defaults to $login
+$ext_login login on the source server, defaults to $login
 $ext_password user's password on the source server, defaults to $password
 $forward_to optional, set forwarding for this new mailbox
 $save_copy works only if forwarding is on; 0 - do not save copies in the local mailbox, 1 - save copies and forward
@@ -669,7 +691,7 @@ Returns 1 if OK, undef if error
 
 =item $pdd->get_import_status( $login )
 
-	$result = {
+	Returns: {
 		last_check => $last_check,
 		imported   => $imported,
 		state      => $state
@@ -685,6 +707,15 @@ Returns 1 if OK, undef if error
 
 
 =item $pdd->stop_import($login)
+
+Returns 1 if OK, undef if error 
+
+=item $pdd->import_imap_folder($login, password => $password, ext_login => $ext_login, ext_password => $ext_password, copy_one_folder = $copy_one_folder)
+
+	$ext_login login on the source, defaults to $login
+	$ext_password password on the source
+	$password in the domain, mandatory if $login is a new user
+	$copy_one_folder folder on the source; UTF-8, optional
 
 Returns 1 if OK, undef if error
 

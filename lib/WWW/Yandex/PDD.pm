@@ -14,7 +14,6 @@ use URI::Escape;
 use WWW::Yandex::PDD::Error;
 
 use constant API_URL => 'https://pddimp.yandex.ru/';
-use constant DEBUG => 'c:/projects/pdd_debug.txt';
 
 sub new
 {
@@ -147,8 +146,8 @@ sub __parse_response
 
 	my $xml;
 
-	if (DEBUG) {
-		open(my $d, '>>', DEBUG) || warn "error opening debug: $!\n";
+	if (defined $ENV{ALUCK_TRACE}) {
+		open(my $d, '>>', $ENV{ALUCK_TRACE}) || warn "error opening debug: $!\n";
 		print $d $self -> {r} -> decoded_content();
 		close($d);
 	}
@@ -585,28 +584,24 @@ sub get_user
 	my $self    = shift;
 	my $login   = shift;
 
-	my $url = API_URL . 'get_user_info.xml?token=' . $self -> {token} . '&login=' . $login;
-
-	return undef unless $self -> __make_request($url);
-
-	my %user =
-	(
-		domain      => $self -> __get_node_text('/page/domain/name/text()'),
-		login       => $self -> __get_node_text('/page/domain/user/login/text()'),
-		birth_date  => $self -> __get_node_text('/page/domain/user/birth_date/text()'),
-		fname       => $self -> __get_node_text('/page/domain/user/fname/text()'),
-		iname       => $self -> __get_node_text('/page/domain/user/iname/text()'),
-		hinta       => $self -> __get_node_text('/page/domain/user/hinta/text()'),
-		hintq       => $self -> __get_node_text('/page/domain/user/hintq/text()'),
-		mail_format => $self -> __get_node_text('/page/domain/user/mail_format/text()'),
-		charset     => $self -> __get_node_text('/page/domain/user/charset/text()'),
-		nickname    => $self -> __get_node_text('/page/domain/user/nickname/text()'),
-		sex         => $self -> __get_node_text('/page/domain/user/sex/text()'),
-		enabled     => $self -> __get_node_text('/page/domain/user/enabled/text()'),
-		signed_eula => $self -> __get_node_text('/page/domain/user/signed_eula/text()'),
-	);
-
-	return \%user;
+	return $self -> __simple_query(
+			API_URL . 'get_user_info.xml?token=' . $self -> {token} . '&login=' . $login,
+			{
+				login       => '/page/domain/user/login/text()',
+				domain      => '/page/domain/name/text()',
+				birth_date  => '/page/domain/user/birth_date/text()',
+				fname       => '/page/domain/user/fname/text()',
+				iname       => '/page/domain/user/iname/text()',
+				hinta       => '/page/domain/user/hinta/text()',
+				hintq       => '/page/domain/user/hintq/text()',
+				mail_format => '/page/domain/user/mail_format/text()',
+				charset     => '/page/domain/user/charset/text()',
+				nickname    => '/page/domain/user/nickname/text()',
+				sex         => '/page/domain/user/sex/text()',
+				enabled     => '/page/domain/user/enabled/text()',
+				signed_eula => '/page/domain/user/signed_eula/text()',
+			}
+		);
 }
 
 sub get_unread_count
@@ -781,6 +776,8 @@ WWW::Yandex::PDD - Perl extension for Yandex mailhosting
 
 =head1 SYNOPSIS
 
+Obtain token at L<https://pddimp.yandex.ru/get_token.xml?domain_name=yourdomain.ru>
+
 	use WWW::Yandex::PDD;
 
 	my $pdd = WWW::Yandex::PDD->new( token => 'abcdefghijklmnopqrstuvwxyz01234567890abcdefghijklmnopqrs' );
@@ -865,6 +862,58 @@ Returns undef if error, otherwise
 	$return = {
 		name 			=> $domain_name,
 	}
+
+
+=item $pdd->domain_add_admin( $domain, $login )
+
+Adds new administrator $login for domain $domain.
+
+Note: $login should be a separate mail box hosted on yandex.ru outside of $domain. For example,
+if you are adding foobar@yandex.ru, $login is 'foobar'
+
+Returns undef if error, otherwise
+
+	$return = {
+			name 			=> 'somedomain.org',
+			new_admin		=> 'foobar',
+		}
+
+
+=item $pdd->domain_del_admin( $domain, $login )
+
+Removes $login from domain $domain administrators.
+
+Returns undef if error, otherwise
+
+	$return = {
+			name 			=> 'somedomain.org',
+			deleted 		=> 'foobar',
+		}
+
+
+=item $pdd->domain_get_admins( $domain )
+
+Returns a list of secondary $domain administrators.
+
+Returns undef if error, otherwise
+
+	$return = {
+			name 			=> 'somedomain.org',
+			other_admins  	=> [ 'admin', 'anotheradmin' ],
+		}
+
+
+=item $pdd->domain_set_default_user( $domain, $login )
+
+Sets address C<$login>@C<$domain> as a default address. All mail to non-existing addresses
+will route to this poor guy.
+
+Returns undef if error, otherwise
+
+	$return = {
+			name 	=> 'somedomain.org',
+			email 	=> 'johndoe',	
+		}
 
 
 =back
@@ -955,6 +1004,27 @@ $save_copy: "yes", "no"
 
 Returns 1 if OK, undef if error
 
+
+=item $pdd->get_forward_list($login)
+
+Returns undef if error
+
+Returns full description of forward rules for $login:
+ 
+ 	$result = {
+		filter_id 			=> 12342343,
+		enabled				=> 'yes', # 'yes' / 'no'
+		forward				=> 'yes', # 'yes' / 'no'
+		copy				=> 'no', # 'yes' / 'no'
+		to_address			=> 'sameuser@otherdomain.org',
+	}
+
+
+=item $pdd->delete_forward( $login, $filter_id )
+
+Removes forward for user $login, forward rule $filter_id. Returns undef if error.
+
+
 =back
 
 
@@ -1021,11 +1091,47 @@ Returns 1 if OK, undef if error
 =back
 
 
+=head2 MAILLISTS
+
+=over 2
+
+=item $pdd->maillist_create( $domain, $login, $listname )
+
+Creates a new mailbox $login. Messages to this mailbox will be sent to all $domain users
+
+Returns undef if error, otherwise
+
+	$return = {
+			name 	=> 'somedomain.org',
+		}
+
+
+
+=item $pdd->maillist_destroy( $domain, $login, $listname )
+
+Deletes previously created list and mailbox $login
+
+Returns undef if error, otherwise
+
+	$return = {
+			name 	=> 'somedomain.org',
+		}
+
+
+=back
+
+
 =head1 SEE ALSO
 
 L<http://pdd.yandex.ru/>
 L<http://api.yandex.ru/pdd/doc/api-pdd/api-pdd.pdf>
 L<http://api.yandex.ru/pdd/doc/api-pdd/concepts/general.xml>
+
+
+=head1 ENVIRONMENT
+
+Setting C<ALUCK_TRACE> environment variable to some debug file name causes L<WWW::Yandex:PDD> to turn on internal
+debugging, and put in this file server XML responses.
 
 
 =head1 AUTHORS

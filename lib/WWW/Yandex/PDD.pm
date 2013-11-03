@@ -14,6 +14,7 @@ use URI::Escape;
 use WWW::Yandex::PDD::Error;
 
 use constant API_URL => 'https://pddimp.yandex.ru/';
+use constant DEBUG => 'c:/projects/pdd_debug.txt';
 
 sub new
 {
@@ -127,11 +128,30 @@ sub __get_node_text
 	return $self -> {xpath} -> findvalue($xpath, $xml);
 }
 
+sub __get_node_array
+{
+	my $self  = shift;
+	my $xpath = shift;
+	my $xml   = shift || $self -> {xml};
+
+	return '' unless ($xpath and $xml); # TODO die
+
+	$xpath =~ s/\/$//;
+
+	return $self -> __get_nodelist( $xpath, $xml ) -> to_literal_list();
+}
+
 sub __parse_response
 {
-	my $self = shift;
+	my $self = shift; 
 
 	my $xml;
+
+	if (DEBUG) {
+		open(my $d, '>>', DEBUG) || warn "error opening debug: $!\n";
+		print $d $self -> {r} -> decoded_content();
+		close($d);
+	}
 
 	eval
 	{
@@ -152,16 +172,18 @@ sub __parse_response
 
 	$self -> {xml} = $xml;
 
-	if ( $self -> {_error} = $self -> __get_node_text('/page/error/@reason') )
+	for my $path (
+			'/page/error/@reason',
+			'/action/status/error',
+			'/action/domains/domain/logo/action-status/error',
+			'/action/domain/status'
+		)
 	{
-		$self -> __handle_error();
-		return undef;
-	}
-
-	if ( $self -> {_error} = $self -> __get_node_text('/action/status/error') )
-	{
-		$self -> __handle_error();
-		return undef;
+		if ( $self -> {_error} = $self -> __get_node_text($path) )
+		{
+			$self -> __handle_error();
+			return undef;
+		}
 	}
 
 	if ( $self -> __get_node_text('/page/xscript_invoke_failed/@error') )
@@ -186,10 +208,18 @@ sub __make_request
 {
 	my $self = shift;
 	my $url  = shift;
+	my $type = shift || 'get';
+	# only for POST requests
+	my $post_content_type = shift;
+	my $post_content = shift; 
 
 	$self -> __reset_error();
 
-	$self -> {r} = $self -> {ua} -> get($url);
+	if ($type eq 'get') {
+		$self -> {r} = $self -> {ua} -> get($url);
+	} else {
+		$self -> {r} = $self -> {ua} -> post( $url, Content_Type => $post_content_type, Content => $post_content) ;
+	}
 
 	unless ($self -> {r} -> is_success)
 	{
@@ -200,39 +230,34 @@ sub __make_request
 	return $self -> __parse_response();
 }
 
-sub is_user_exists
-{
-	my $self  = shift;
-	my $login = shift;
-
-	my $url = API_URL . 'check_user.xml?token=' . $self -> {token} . '&login=' . $login;
+sub __simple_query {
+	my $self = shift;
+	my $url = shift;
+	my $returning_params = shift;
 
 	return undef unless $self -> __make_request($url);
 
-	if ( my $result = $self -> __get_node_text('/page/result/text()') )
-	{
-		return 1 if ( 'exists' eq $result );
-		return 0 if ( 'nouser' eq $result );
+	if ($returning_params) {
+		my %result;
+		foreach my $param (keys %$returning_params) {
+			my $xpath = $returning_params->{$param};
+			if ($xpath =~ /\/$/) {
+				$result{$param} = $self -> __get_node_array( $xpath );
+			} else {
+				$result{$param} = $self -> __get_node_text( $xpath );
+			}
+		}
+
+		return \%result;
+	} else {
+		return 1;
 	}
-
-	return $self -> __unknown_error();
 }
-
-# TODO: reg_default_user
-# TODO: add_logo
-# TODO: del_logo
-# TODO: add_admin
-# TODO: del_admin
-# TODO: get_admins
-# TODO: get_forward_list
-# TODO: delete_forward
-# TODO: create_general_maillist
-# TODO: delete_general_maillist
 
 sub get_last_error {
 	my $self = shift;
 
-	my $error;
+	my $error = undef;
 
 	if ( $self -> {error} ) {
 		$error = $self -> {error};
@@ -240,43 +265,149 @@ sub get_last_error {
 		$error = $self -> {http_error};
 	}
 
-	if ( $error ) {
-		return {
-			code => $error -> {code},
-			info => $error -> {info},
-		};
-	} else {
-		return undef;
-	}
+	return $error;
 }
 
-sub reg_domain
+# DOMAINS
+
+sub domain_reg
 {
+	my ($self, $domain) = @_;
+
+	return $self -> __simple_query(
+			API_URL . 'api/reg_domain.xml?token=' . $self -> {token} . '&domain=' . $domain,
+			{
+				name 			=> '/action/domains/domain/name/text()',
+				secret_name 	=> '/action/domains/domain/secret_name/text()',
+				secret_value 	=> '/action/domains/domain/secret_value/text()',
+			}
+		);
+}
+
+sub domain_unreg
+{
+	my ($self, $domain) = @_;
+
+	return $self -> __simple_query(
+			API_URL . 'api/del_domain.xml?token=' . $self -> {token} . '&domain=' . $domain,
+		);
+}
+
+sub domain_add_logo {
 	my $self = shift;
 	my $domain = shift;
+	my $file_name = shift; # jpg, gif, png < 2 Mb
 
-	my $url = API_URL . 'api/reg_domain.xml?token=' . $self -> {token} . '&domain=' . $domain;
+	my $content = {
+			token => $self -> {token},
+			domain => $domain,
+			file => [ $file_name ],
+		};
 
-	return undef unless $self -> __make_request($url);
+	return undef unless $self -> __make_request(API_URL . 'api/add_logo.xml', 'post', 'multipart/form-data', $content);
 
+	# FIXME: <action><status/><domains><domain><name>monicor.ru</name><logo xmlns:xi="http://www.w3.org/2001/XInclude"><action-status><error>save_failed</error></action-status></logo></domain></domains></action>
 	return {
 		name 			=> $self -> __get_node_text('/action/domains/domain/name/text()'),
-		secret_name 	=> $self -> __get_node_text('/action/domains/domain/secret_name/text()'),
-		secret_value 	=> $self -> __get_node_text('/action/domains/domain/secret_value/text()'),
+		logo_url	 	=> $self -> __get_node_text('/action/domains/logo/url/text()'),
 	};
 }
 
-sub del_domain
-{
+sub domain_del_logo {
+	my ($self, $domain) = @_;
+
+	return $self -> __simple_query(
+			API_URL . 'api/del_logo.xml?token=' . $self -> {token} . '&domain=' . $domain,
+			{
+				name 			=> '/action/domains/domain/name/text()',
+			}
+		);
+}
+
+sub domain_set_default_user {
+	my ($self, $domain, $login) = @_;
+
+	return $self -> __simple_query(
+			API_URL . 'api/reg_default_user.xml?token=' . $self -> {token} . '&domain=' . $domain . '&login=' . $login,
+			{
+				name 	=> '/action/domains/domain/name/text()',
+				email 	=> '/action/domains/domain/default-email/text()',	
+			}
+		);
+}
+
+sub domain_add_admin {
+	my $self = shift;
+	my $domain = shift;
+	my $login = shift; # should be a real mailbox from @yandex.ru; i.e. if you want to add foobar@yandex.ru - $login should be "foobar"
+
+	return $self -> __simple_query(
+			API_URL . 'api/multiadmin/add_admin.xml?token=' . $self -> {token} . '&domain=' . $domain
+				. '&login=' . $login,
+			{
+				name 			=> '/action/domain/name/text()',
+				new_admin		=> '/action/domain/new-admin/text()',
+			}
+		);
+}
+
+sub domain_del_admin {
+	my $self = shift;
+	my $domain = shift;
+	my $login = shift;
+
+	return $self -> __simple_query(
+			API_URL . 'api/multiadmin/del_admin.xml?token=' . $self -> {token} . '&domain=' . $domain
+				. '&login=' . $login,
+			{
+				name 			=> '/action/domain/name/text()',
+				deleted 		=> '/action/domain/new-admin/text()',
+			}
+		);
+}
+
+sub domain_get_admins {
 	my $self = shift;
 	my $domain = shift;
 
-	my $url = API_URL . 'api/del_domain.xml?token=' . $self -> {token} . '&domain=' . $domain;
-
-	return undef unless $self -> __make_request($url);
-
-	return 1;
+	return $self -> __simple_query(
+			API_URL . 'api/multiadmin/get_admins.xml?token=' . $self -> {token} . '&domain=' . $domain,
+			{
+				name 			=> '/action/domain/name/text()',
+				other_admins  	=> '/action/domain/other-admins/login/',
+			}
+		);
 }
+
+# MAILLISTS
+
+sub maillist_create {
+	my ($self, $domain, $listname) = @_;
+
+	# NOTE: new user $listname will be created
+
+	return $self -> __simple_query(
+			API_URL . 'api/create_general_maillist.xml?token=' . $self -> {token} . '&domain=' . $domain
+				. '&ml_name=' . $listname,
+			{
+				name 	=> '/action/domains/domain/name/text()',
+			}
+		);
+}
+
+sub maillist_destroy {
+	my ($self, $domain, $listname) = @_;
+
+	return $self -> __simple_query(
+			API_URL . 'api/delete_general_maillist.xml?token=' . $self -> {token} . '&domain=' . $domain
+				. '&ml_name=' . $listname,
+			{
+				name 	=> '/action/domains/domain/name/text()',
+			}
+		);
+}
+
+# USERS
 
 sub create_user
 {
@@ -303,6 +434,24 @@ sub create_user
 	if ( my $uid = $self -> __get_node_text('/page/ok/@uid') )
 	{
 		return $uid;
+	}
+
+	return $self -> __unknown_error();
+}
+
+sub is_user_exists
+{
+	my $self  = shift;
+	my $login = shift;
+
+	my $url = API_URL . 'check_user.xml?token=' . $self -> {token} . '&login=' . $login;
+
+	return undef unless $self -> __make_request($url);
+
+	if ( my $result = $self -> __get_node_text('/page/result/text()') )
+	{
+		return 1 if ( 'exists' eq $result );
+		return 0 if ( 'nouser' eq $result );
 	}
 
 	return $self -> __unknown_error();
@@ -382,6 +531,30 @@ sub delete_user
 	}
 
 	return $self -> __unknown_error();
+}
+
+sub get_forward_list {
+	my ($self, $login) = @_;
+
+	return $self -> __simple_query(
+			API_URL . 'get_forward_list.xml?token=' . $self -> {token} . '&login=' . $login,
+			{
+				filter_id 			=> '/page/ok/filters/filter/id',
+				enabled				=> '/page/ok/filters/filter/enabled', # 'yes' / 'no'
+				forward				=> '/page/ok/filters/filter/forward', # 'yes' / 'no'
+				copy				=> '/page/ok/filters/filter/copy', # 'yes' / 'no'
+				to_address			=> '/page/ok/filters/filter/filter_param',
+			}
+		);
+}
+
+sub delete_forward {
+	my ($self, $login, $filter_id) = @_;
+
+	return $self -> __simple_query(
+			API_URL . 'delete_forward.xml?token=' . $self -> {token} . '&login=' . $login
+				. '&filter_id=' . $filter_id
+		);
 }
 
 sub set_forward
@@ -473,8 +646,7 @@ sub get_user_list
 		push( @emails, $_ -> textContent );
 	}
 
-	$self -> {info} =
-	{
+	$self -> {info} = {
 		'action-status'    =>  $self -> __get_node_text('/page/domains/domain/emails/action-status/text()'),
 		'found'            =>  $self -> __get_node_text('/page/domains/domain/emails/found/text()'),
 		'total'            =>  $self -> __get_node_text('/page/domains/domain/emails/total/text()'),
@@ -652,7 +824,9 @@ Returns undef if there was no error; otherwise
 
 =over 2
 
-=item $pdd->reg_domain( $domain )
+=item $pdd->domain_reg( $domain )
+
+Sign up $domain for Yandex Mail API
 
 Returns undef if error, otherwise
 	
@@ -663,9 +837,34 @@ Returns undef if error, otherwise
 	}
 
 
-=item $pdd->del_domain( $domain )
+=item $pdd->domain_unreg( $domain )
+
+Disconnect this $domain 
 
 Returns 1 if success, undef if error
+
+
+=item $pdd->domain_add_logo( $domain, $file_name )
+
+Adds logo from $file_name (jpg, gif, png; < 2 Mb) to $domain.
+
+Returns undef if error, otherwise
+	
+	$return = {
+		name 			=> $domain_name,
+		logo_url	 	=> $logo_url,
+	};
+
+
+=item $pdd->domain_del_logo( $domain )
+
+Removes logo from $domain
+
+Returns undef if error, otherwise
+	
+	$return = {
+		name 			=> $domain_name,
+	}
 
 
 =back
@@ -825,6 +1024,7 @@ Returns 1 if OK, undef if error
 =head1 SEE ALSO
 
 L<http://pdd.yandex.ru/>
+L<http://api.yandex.ru/pdd/doc/api-pdd/api-pdd.pdf>
 L<http://api.yandex.ru/pdd/doc/api-pdd/concepts/general.xml>
 
 

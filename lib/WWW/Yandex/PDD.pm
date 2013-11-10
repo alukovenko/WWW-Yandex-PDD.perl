@@ -932,7 +932,7 @@ Returns undef if error, otherwise
 
 =item $pdd->update_user( $login, password => $password, iname => $iname, fname => $fname, sex => $sex, hintq => $hintq, hinta => $hinta )
 
-See L<$pdd->get_user> for parameters meaning
+See L<$pdd-E<gt>get_user> for parameters meaning
 
 Returns UID if success, undef otherwise
 
